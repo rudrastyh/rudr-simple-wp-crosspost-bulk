@@ -4,7 +4,7 @@
  * Author: Misha Rudrastyh
  * Author URI: https://rudrastyh.com
  * Description: Allows to crosspost multiple WooCommerce products at once.
- * Version: 3.1
+ * Version: 3.2
  */
 
 class Rudr_WP_Crosspost_Bulk{
@@ -160,8 +160,8 @@ class Rudr_WP_Crosspost_Bulk{
 			// exclude some fields
 			$excluded_fields = get_option( 'rudr_sac_excluded_fields', array() );
 			foreach( $excluded_fields as $key ) {
-				if( array_key_exists( $key, $body_data ) ) {
-					unset( $body_data[ $key ] );
+				if( array_key_exists( $key, $request[ 'body' ] ) ) {
+					unset( $request[ 'body' ][ $key ] );
 				}
 			}
 
