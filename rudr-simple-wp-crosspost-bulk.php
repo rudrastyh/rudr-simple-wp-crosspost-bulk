@@ -4,29 +4,31 @@
  * Author: Misha Rudrastyh
  * Author URI: https://rudrastyh.com
  * Description: Allows to crosspost multiple WooCommerce products at once.
- * Version: 3.2
+ * Version: 4.0
  */
 
 class Rudr_WP_Crosspost_Bulk{
 
-	const LIMIT = 20;
+	const PER_TICK = 5;
 
 	function __construct(){
 		add_action( 'admin_init', array( $this, 'init' ), 999 );
 		add_action( 'admin_notices', array( $this, 'notices' ) );
+		// cron
+		add_action( 'rudr_swc_bulk', array( $this, 'run_cron' ), 10, 2 );
+		add_filter( 'cron_schedules', array( $this, 'cron_intervals' ) );
+		add_action( 'admin_footer', array( $this, 'js' ) );
 	}
 
 	// bulk action hooks
 	public function init(){
 
-		// we get and filter post types the same way we do it in the plugin itself
-		$post_types = get_post_types( array( 'public' => true ) );
-		$allowed_post_types = get_option( 'rudr_sac_post_types', array() );
-		$post_types = $allowed_post_types && is_array( $allowed_post_types ) ? array_intersect( $post_types, $allowed_post_types ) : $post_types;
-		if( ( $key = array_search( 'attachment', $post_types ) ) !== false) {
-			unset( $post_types[ $key ] );
+		// do absolutely nothing is the main plugin is not activated
+		if( ! class_exists( 'Rudr_Simple_WP_Crosspost' ) ) {
+			return;
 		}
 
+		$post_types = Rudr_Simple_WP_Crosspost::get_allowed_post_types();
 		if( $post_types ) {
 			foreach( $post_types as $post_type ) {
 				add_filter( 'bulk_actions-edit-' . $post_type, array( $this, 'bulk_action' ) );
@@ -39,15 +41,14 @@ class Rudr_WP_Crosspost_Bulk{
 	// display the bulk actions
 	public function bulk_action( $bulk_actions ) {
 
-		if( class_exists( 'Rudr_Simple_WP_Crosspost' ) && ( $blogs = Rudr_Simple_WP_Crosspost::get_blogs() ) ) {
+		$blogs = Rudr_Simple_WP_Crosspost::get_blogs();
+		// no blogs are added in the plugin settings or something
+		if( $blogs ) {
 
-			// some tricks with blog name are going to be here
-			// first, is the hook in use?
-			$use_domains = apply_filters( 'rudr_crosspost_use_domains_as_names', false );
+			// hook https://rudrastyh.com/support/simple-wordpress-crossposting-hook-reference#rudr_swc_use_domains_as_names
+			$use_domains = apply_filters( 'rudr_swc_use_domains_as_names', false );
 
 			foreach( $blogs as $blog ) {
-
-				// second, we should use URL when blog name isn't provided as well
 				$blogname = ( $use_domains || ! $blog[ 'name' ] ) ? str_replace( array( 'http://', 'https://' ), '', $blog[ 'url' ] ) : $blog[ 'name' ];
 				$bulk_actions[ 'crosspost_to_'. Rudr_Simple_WP_Crosspost::get_blog_id( $blog ) ] = "Crosspost to {$blogname}";
 			}
@@ -58,35 +59,23 @@ class Rudr_WP_Crosspost_Bulk{
 	}
 
 
-	// and now the most interesting part
+	// run the actions
 	public function do_bulk_action( $redirect, $doaction, $object_ids ){
 
 		set_time_limit(300);
 
 		// first, remove errors query args
-		$redirect = remove_query_arg(
-			array(
-				'swc_crossposted',
-				'swc_errno'
-			),
-			$redirect
-		);
+		$redirect = remove_query_arg( array( 'swc_crossposted', 'swc_errno' ), $redirect );
 
-		// we do nothing if it is not our bulk action
+		// bulk action check
 		if( 'crosspost_to_' !== substr( $doaction, 0, 13 ) ) {
 			return $redirect;
 		}
 
-		// additionally check for plugin just in case
-		if( ! class_exists( 'Rudr_Simple_WP_Crosspost' ) ) {
-			return $redirect;
-		}
-
-
-
-		// let's figure it out post type now and do nothing if we can not
+		// get a post type
 		$screen = get_current_screen();
 		$post_type = ! empty( $screen->post_type ) ? $screen->post_type : false;
+		// just in case
 		if( ! $post_type ) {
 			return $redirect;
 		}
@@ -94,24 +83,39 @@ class Rudr_WP_Crosspost_Bulk{
 		// extract blog ID from bulk action
 		$blog_id = str_replace( 'crosspost_to_', '', $doaction );
 
-		// oops, we have some limits here as well
-		if( count( $object_ids ) > self::LIMIT ) {
-			return add_query_arg( 'swc_errno', 'bulk_limit_exceeded', $redirect );
+		// depending on how many objects have been selected we may additionally run a cron task
+		// 10 objects per iteration seems pretty safe, depends of course, but for the majority
+		if( count( $object_ids ) > self::PER_TICK ) {
+			$this->start_cron( $object_ids, $blog_id, $post_type );
 		}
 
-		if( Rudr_Simple_WP_Crosspost::is_woocommerce() && 'product' === $post_type ) {
-			$res = $this->bulk_products( $object_ids, $blog_id );
-		} else {
-			$res = $this->bulk_posts( $object_ids, $blog_id, $post_type );
-		}
+		$this->do_bulk( array_slice( $object_ids, 0, self::PER_TICK ), $blog_id, $post_type );
 
-		// redirect to success
-		return $this->process_errors( $res, $redirect, $object_ids );
+		// simepl – here we just redirect to a success message
+		// errors are going to be added when we doing the crossposting
+		// whether we are using cron or not we decide in admin_notices already
+		return add_query_arg( array( 'swc_crossposted' => count( $object_ids ) ), $redirect );
 
 	}
 
 
+	// doing the bulk
+	private function do_bulk( $object_ids, $blog_id, $post_type ) {
+//return;
+		if( Rudr_Simple_WP_Crosspost::is_woocommerce() && 'product' === $post_type ) {
+			$this->bulk_products( $object_ids, $blog_id );
+		} else {
+			$this->bulk_posts( $object_ids, $blog_id, $post_type );
+		}
+
+	}
+
+	// posts only
 	private function bulk_posts( $object_ids, $blog_id, $post_type ) {
+
+		if( ! class_exists( 'Rudr_Simple_WP_Crosspost' ) ) {
+			return;
+		}
 
 		// blog information
 		$blog = Rudr_Simple_WP_Crosspost::get_blog( $blog_id );
@@ -221,13 +225,20 @@ class Rudr_WP_Crosspost_Bulk{
 
 		}
 
-		return $request;
+		$this->process_errors( $request, $post_type );
 
 	}
 
-
-	// Bulk crosspost products (it gets more interesting)
+	// WooCommerce products only
 	private function bulk_products( $object_ids, $blog_id ) {
+
+		if( ! class_exists( 'Rudr_Simple_WP_Crosspost' ) ) {
+			return;
+		}
+
+		if( ! function_exists( 'wc_get_product' ) ) {
+			return;
+		}
 
 		$excluded = get_option( 'rudr_sac_excluded_woo_fields', array() );
 		$excluded_post_fields = get_option( 'rudr_sac_excluded_fields', array() );
@@ -297,7 +308,9 @@ class Rudr_WP_Crosspost_Bulk{
 				$product_data[ 'id' ] = $id;
 				$body[ 'update' ][] = $product_data;
 				// super cool story here is that we can update product variations at this step, we have everything for it
-				Rudr_Simple_Woo_Crosspost::add_product_variations( $id, $product, $blog );
+				if( ! in_array( 'variations', $excluded ) ) {
+					Rudr_Simple_Woo_Crosspost::add_product_variations( $id, $product, $blog );
+				}
 
 			} else {
 				unset( $product_data[ 'id' ] );
@@ -335,25 +348,82 @@ class Rudr_WP_Crosspost_Bulk{
 						);
 					}
 					update_post_meta( $products_to_create[$i]->get_id(), Rudr_Simple_WP_Crosspost::META_KEY . $blog_id, true );
-					Rudr_Simple_Woo_Crosspost::add_product_variations( $products[ 'create' ][ $i ][ 'id' ], $products_to_create[$i], $blog );
+					if( ! in_array( 'variations', $excluded ) ) {
+						Rudr_Simple_Woo_Crosspost::add_product_variations( $products[ 'create' ][ $i ][ 'id' ], $products_to_create[$i], $blog );
+					}
 				}
 			}
 
 		}
 
-		return $request;
+		$this->process_errors( $request, 'product' );
 
 	}
 
-	private function process_errors( $res, $redirect, $object_ids ) {
 
-		// we need to get a response code which is going to be sent as ?errno=
-		$errno = false;
+	public function cron_intervals( $intervals ) {
+
+		$intervals[ 'swc_min' ] = array(
+			'interval' => 60,
+			'display' => 'Every min (Simple WP Crossposting)'
+		);
+		return $intervals;
+
+	}
+
+	// starting the cron job
+	private function start_cron( $object_ids, $blog_id, $post_type ) {
+
+		if( ! wp_next_scheduled( 'rudr_swc_bulk', array( $blog_id, $post_type ) ) ) {
+			wp_schedule_event( time() + 30, 'swc_min', 'rudr_swc_bulk', array( $blog_id, $post_type ) );
+		} else {
+			// TODO maybe we can display some error messages
+			return;
+		}
+
+		update_option( "rudr_swc_bulk_{$post_type}_ids_total", $object_ids );
+		update_option( "rudr_swc_bulk_{$post_type}_ids", array_slice( $object_ids, self::PER_TICK ) );
+		delete_option( "rudr_swc_bulk_{$post_type}_errors" );
+		delete_option( "rudr_swc_bulk_{$post_type}_finished" );
+
+	}
+
+	// doing the cron job iteration
+	public function run_cron( $blog_id, $post_type ) {
+
+		// get remaining object IDs first
+		$object_ids = get_option( "rudr_swc_bulk_{$post_type}_ids" );
+
+		if( $object_ids ) {
+			// run sync
+			$this->do_bulk( array_slice( $object_ids, 0, self::PER_TICK ), $blog_id, $post_type );
+
+			if( count( $object_ids ) > self::PER_TICK ) {
+				// remove first 10 objects
+				$object_ids = array_slice( $object_ids, self::PER_TICK );
+				// update option
+				update_option( "rudr_swc_bulk_{$post_type}_ids", $object_ids );
+			} else {
+
+				delete_option( "rudr_swc_bulk_{$post_type}_ids" );
+				update_option( "rudr_swc_bulk_{$post_type}_finished", 'yes' );
+				// unschedule cron
+				wp_clear_scheduled_hook( 'rudr_swc_bulk', array( $blog_id, $post_type ) );
+			}
+		}
+
+	}
+
+
+
+	private function process_errors( $request, $post_type ) {
+		//file_put_contents( __DIR__ . '/log.txt' , print_r( $request, true ) );
+		$errors = get_option( "rudr_swc_bulk_{$post_type}_errors", array() );
 
 		// let's try to process WordPress errors first
-		if( 207 === wp_remote_retrieve_response_code( $res ) ) {
+		if( 207 === wp_remote_retrieve_response_code( $request ) ) {
 
-			$body = json_decode( wp_remote_retrieve_body( $res ), true );
+			$body = json_decode( wp_remote_retrieve_body( $request ), true );
 			$responses = isset( $body[ 'responses' ] ) ? $body[ 'responses' ] : array();
 
 			// using for here in case we make the errors more advanced
@@ -364,17 +434,24 @@ class Rudr_WP_Crosspost_Bulk{
 				}
 				// error? record it and exit the loop
 				if( ! empty( $responses[ $i ][ 'body' ][ 'code' ] ) ) {
-					$errno = $responses[ $i ][ 'body' ][ 'code' ];
-					break;
+					// ok we need to add this code to an array
+					$code = $responses[ $i ][ 'body' ][ 'code' ];
+					// in case we didn't have errors for this error code so far
+					if( empty( $errors[ $code ] ) ) {
+						$errors[ $code ] = 0;
+					}
+					// +1 error
+					$errors[ $code ]++;
+
 				}
 			}
 
 		}
 
 		// processing errors for WooCommerce 200 - OK
-		if( 200 === wp_remote_retrieve_response_code( $res ) ) {
+		if( 200 === wp_remote_retrieve_response_code( $request ) ) {
 
-			$body = json_decode( wp_remote_retrieve_body( $res ), true );
+			$body = json_decode( wp_remote_retrieve_body( $request ), true );
 			$create = isset( $body[ 'create' ] ) ? $body[ 'create' ] : array();
 			$update = isset( $body[ 'update' ] ) ? $body[ 'update' ] : array();
 			$responses = $create + $update;
@@ -383,71 +460,161 @@ class Rudr_WP_Crosspost_Bulk{
 			for( $i = 0; $i < count( $responses ); $i++ ) {
 				// error? record it and exit the loop
 				if( ! empty( $responses[ $i ][ 'error' ][ 'code' ] ) ) {
-					$errno = $responses[ $i ][ 'error' ][ 'code' ];
-					break;
+					// ok we need to add this code to an array
+					$code = $responses[ $i ][ 'error' ][ 'code' ];
+					// in case we didn't have errors for this error code so far
+					if( empty( $errors[ $code ] ) ) {
+						$errors[ $code ] = 0;
+					}
+					// +1 error
+					$errors[ $code ]++;
 				}
 			}
 
 		}
 
-		if( $errno ) {
+		update_option( "rudr_swc_bulk_{$post_type}_errors", $errors );
 
-			return add_query_arg( array( 'swc_errno' => $errno ), $redirect );
+	}
 
+
+
+	public function notices(){
+
+		// get some screen information about post type etc
+		$screen = get_current_screen();
+		$post_type = ! empty( $screen->post_type ) ? $screen->post_type : false;
+		// something is not right here
+		if( 'edit' !== $screen->base || ! $post_type ) {
+			return;
+		}
+
+		if( ! class_exists( 'Rudr_Simple_WP_Crosspost' ) ) {
+			return;
+		}
+
+		$display_notices = true;
+		$display_errors = false;
+
+		// seems like we need to loop all the blogs and check whhether a cron job is running
+		$blogs = Rudr_Simple_WP_Crosspost::get_blogs();
+		// if there is no blogs added, nothing else to do here anyway
+		if( ! $blogs ) {
+			return;
+		}
+
+		// post type object will be useful
+		$post_type_object = get_post_type_object( $post_type );
+		// we are going to display blog names in some notifications
+		$use_domains = apply_filters( 'rudr_swc_use_domains_as_names', false );
+
+		// Schedule action message
+		foreach( $blogs as $blog ) {
+			$blog_id = Rudr_Simple_WP_Crosspost::get_blog_id( $blog );
+			$blogname = ( $use_domains || ! $blog[ 'name' ] ) ? str_replace( array( 'http://', 'https://' ), '', $blog[ 'url' ] ) : $blog[ 'name' ];
+
+			if( wp_next_scheduled( 'rudr_swc_bulk', array( $blog_id, $post_type ) ) ) {
+				$display_notices = false;
+				?><div class="notice-info notice swc-bulk-notice--in-progress"><p><?php echo esc_html( sprintf( '%s are currently being crossposted to %s in the background. It may take some time depending on how many products you have selected.', $post_type_object->label, $blogname ) ) ?></p></div><?php
+			}
+		}
+
+		// get the amount of error messages we encountered
+		//update_option( 'rudr_swc_bulk_errors', array( 'rest_post_invalid_id' => 2 ) );
+
+		$errors = get_option( "rudr_swc_bulk_{$post_type}_errors", array() );
+		if( 'product' === $post_type ) {
+			// WooCommerce
+			$error_1_count = ! empty( $errors[ 'woocommerce_rest_product_invalid_id' ] ) ? (int) $errors[ 'woocommerce_rest_product_invalid_id' ] : 0;
+			$error_2_count = ! empty( $errors[ 'woocommerce_product_invalid_image_id' ] ) ? (int) $errors[ 'woocommerce_product_invalid_image_id' ] : 0;
+			$total_errors = $error_1_count + $error_2_count;
 		} else {
+			// other post types
+			$error_1_count = ! empty( $errors[ 'rest_post_invalid_id' ] ) ? (int) $errors[ 'rest_post_invalid_id' ] : 0;
+			$total_errors = $error_1_count;
+		}
 
-			return add_query_arg( array( 'swc_crossposted' => count( $object_ids ) ), $redirect );
+		// Success message when less than 10 products selected
+		$object_ids = isset( $_REQUEST[ 'swc_crossposted' ] ) && $_REQUEST[ 'swc_crossposted' ] ? absint( $_REQUEST[ 'swc_crossposted' ] ) : 0;
+		if( $display_notices ) {
+			if( $object_ids && $object_ids <= self::PER_TICK ) {
+				// remove error numbers
+				$display_errors = true;
+				$object_ids = $object_ids - $total_errors;
+				if( $object_ids > 0 ) {
+					// display success message because at least one item has been crossposted – great!
+					?><div class="updated notice is-dismissible"><p><?php
+					echo esc_html( sprintf(
+						'' . _n( '%d %s has been successfully crossposted.', '%d %s have been successfully crossposted.', $object_ids ),
+						$object_ids,
+						mb_strtolower( $object_ids > 1 ? $post_type_object->label : $post_type_object->labels->singular_name )
+					) );
+					?></p></div><?php
 
+				}
+			} elseif( 'yes' == get_option( "rudr_swc_bulk_{$post_type}_finished" ) ) {
+				delete_option( "rudr_swc_bulk_{$post_type}_finished" );
+
+				$display_errors = true;
+				$object_ids = get_option( "rudr_swc_bulk_{$post_type}_ids_total", array() );
+				$object_ids = is_array( $object_ids ) ? count( $object_ids ) : 0;
+				$object_ids = $object_ids - $total_errors;
+				// the same
+				if( $object_ids > 0 ) {
+					?><div class="updated notice is-dismissible"><p><?php
+					echo esc_html( sprintf(
+						_n( '%d %s has been successfully crossposted.', '%d %s have been successfully crossposted.', $object_ids ),
+						$object_ids,
+						mb_strtolower( $object_ids > 1 ? $post_type_object->label : $post_type_object->labels->singular_name )
+					) );
+					?></p></div><?php
+				}
+
+			}
+		}
+
+		if( $display_errors ) {
+			// Display error message for error 1
+			if( isset( $error_1_count ) && $error_1_count ) {
+				?><div class="notice-warning notice is-dismissible"><p><?php
+				echo esc_html( sprintf(
+					_n( '%d %s hasn\'t been crossposted because its copy on another site was removed manually.', '%d %s haven\'t been crossposted because their copies on another site were removed manually.', $error_1_count ),
+					$error_1_count,
+					mb_strtolower( $error_1_count > 1 ? $post_type_object->label : $post_type_object->labels->singular_name )
+				) );
+				?></p></div><?php
+			}
+
+			// Display error message for error 2
+			if( isset( $error_2_count ) && $error_2_count ) {
+				?><div class="notice-warning notice is-dismissible"><p><?php
+				echo esc_html( sprintf(
+					_n( '%d %s hasn\'t been crossposted because its images on another site were removed manually.', '%d %s haven\'t been crossposted because their images on another site were removed manually.', $error_2_count ),
+					$error_2_count,
+					mb_strtolower( $error_2_count > 1 ? $post_type_object->label : $post_type_object->labels->singular_name )
+				) );
+				?></p></div><?php
+			}
+
+			delete_option( "rudr_swc_bulk_{$post_type}_errors" );
 		}
 
 
 	}
 
-
-	// display some appripriate notices
-	public function notices(){
-
-		$screen = get_current_screen();
-		if( 'edit' !== $screen->base ) {
-			return;
-		}
-
-		if( ! empty( $_GET[ 'swc_errno' ] ) ) {
-
-			switch( $_GET[ 'swc_errno' ] ) {
-
-				case 'rest_post_invalid_id' : {
-					?><div class="error notice is-dismissible"><p>Some posts haven't been updated because their copies on another website were removed manually.</p></div><?php
-					break;
-				}
-
-				case 'woocommerce_product_invalid_image_id' : {
-					?><div class="error notice is-dismissible"><p>Some products haven't been synced because their images on another website were removed manually. If want to re-upload them, re-publish them individually.</p></div><?php
-					break;
-				}
-
-				case 'bulk_limit_exceeded' : {
-					?><div class="error notice is-dismissible"><p>You have selected to many items. Please select <?php echo self::LIMIT ?> or less.</p></div><?php
-					break;
-				}
-
-				default: {
-					break;
-				}
-
+	// JS check, the beautiful way
+	public function js() {
+		?><script>
+		jQuery( function( $ ) {
+			if( $( '.swc-bulk-notice--in-progress' ).length > 0 ) {
+				$( '#bulk-action-selector-top option, #bulk-action-selector-bottom option' ).each( function() {
+					if( $(this).val().startsWith( 'crosspost_to_' ) ) {
+						$(this).prop( 'disabled', true );
+					}
+				} );
 			}
-
-		}
-
-		if( ! empty( $_REQUEST[ 'swc_crossposted' ] ) ) {
-
-			printf( '<div class="updated notice is-dismissible"><p>' .
-				_n( '%s item has been successfully synced.', '%s items have been successfully crossposted.', absint( $_REQUEST[ 'swc_crossposted' ] ) )
-				. '</p></div>', absint( $_REQUEST[ 'swc_crossposted' ] ) );
-
-		}
-
-
+		});
+		</script><?php
 	}
 
 }
