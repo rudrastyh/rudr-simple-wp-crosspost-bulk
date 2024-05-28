@@ -4,12 +4,13 @@
  * Author: Misha Rudrastyh
  * Author URI: https://rudrastyh.com
  * Description: Allows to crosspost multiple WooCommerce products at once.
- * Version: 4.0
+ * Plugin URI: https://rudrastyh.com/support/bulk-crossposting
+ * Version: 4.1
  */
 
 class Rudr_WP_Crosspost_Bulk{
 
-	const PER_TICK = 5;
+	const PER_TICK = 10;
 
 	function __construct(){
 		add_action( 'admin_init', array( $this, 'init' ), 999 );
@@ -403,14 +404,14 @@ class Rudr_WP_Crosspost_Bulk{
 				$object_ids = array_slice( $object_ids, self::PER_TICK );
 				// update option
 				update_option( "rudr_swc_bulk_{$post_type}_ids", $object_ids );
-			} else {
-
-				delete_option( "rudr_swc_bulk_{$post_type}_ids" );
-				update_option( "rudr_swc_bulk_{$post_type}_finished", 'yes' );
-				// unschedule cron
-				wp_clear_scheduled_hook( 'rudr_swc_bulk', array( $blog_id, $post_type ) );
+				return;
 			}
 		}
+
+		delete_option( "rudr_swc_bulk_{$post_type}_ids" );
+		update_option( "rudr_swc_bulk_{$post_type}_finished", 'yes' );
+		// unschedule cron
+		wp_clear_scheduled_hook( 'rudr_swc_bulk', array( $blog_id, $post_type ) );
 
 	}
 
@@ -515,7 +516,7 @@ class Rudr_WP_Crosspost_Bulk{
 
 			if( wp_next_scheduled( 'rudr_swc_bulk', array( $blog_id, $post_type ) ) ) {
 				$display_notices = false;
-				?><div class="notice-info notice swc-bulk-notice--in-progress"><p><?php echo esc_html( sprintf( '%s are currently being crossposted to %s in the background. It may take some time depending on how many products you have selected.', $post_type_object->label, $blogname ) ) ?></p></div><?php
+				?><div class="notice-info notice swc-bulk-notice--in-progress"><p><?php echo esc_html( sprintf( '%s are currently being crossposted to %s in the background. It may take some time depending on how many %s you have selected.', $post_type_object->label, $blogname, mb_strtolower( $post_type_object->label ) ) ) ?></p></div><?php
 			}
 		}
 
