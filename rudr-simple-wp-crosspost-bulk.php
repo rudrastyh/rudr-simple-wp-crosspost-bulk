@@ -5,7 +5,7 @@
  * Author URI: https://rudrastyh.com
  * Description: Allows to crosspost multiple WooCommerce products at once.
  * Plugin URI: https://rudrastyh.com/support/bulk-crossposting
- * Version: 4.1
+ * Version: 4.2
  */
 
 class Rudr_WP_Crosspost_Bulk{
@@ -254,6 +254,7 @@ class Rudr_WP_Crosspost_Bulk{
 		);
 		// we need it in order to store crossposted data
 		$products_to_create = array();
+		$products_to_update = array();
 
 		foreach( $object_ids as $product_id ) {
 			$product = wc_get_product( $product_id );
@@ -308,6 +309,7 @@ class Rudr_WP_Crosspost_Bulk{
 			if( $id = Rudr_Simple_Woo_Crosspost::is_crossposted_product( $product, $blog ) ) {
 				$product_data[ 'id' ] = $id;
 				$body[ 'update' ][] = $product_data;
+				$products_to_update[] = $product;
 				// super cool story here is that we can update product variations at this step, we have everything for it
 				if( ! in_array( 'variations', $excluded ) ) {
 					Rudr_Simple_Woo_Crosspost::add_product_variations( $id, $product, $blog );
@@ -325,6 +327,7 @@ class Rudr_WP_Crosspost_Bulk{
 		$request = wp_remote_post(
 			$blog[ 'url' ] . '/wp-json/wc/v3/products/batch',
 			array(
+				'timeout' => 30,
 				'headers' => array(
 					'Authorization' => 'Basic ' . base64_encode( "{$blog[ 'login' ]}:{$blog[ 'pwd' ]}" )
 				),
@@ -352,6 +355,12 @@ class Rudr_WP_Crosspost_Bulk{
 					if( ! in_array( 'variations', $excluded ) ) {
 						Rudr_Simple_Woo_Crosspost::add_product_variations( $products[ 'create' ][ $i ][ 'id' ], $products_to_create[$i], $blog );
 					}
+				}
+			}
+			// let's check the checkbox for updated products as well
+			if( isset( $products[ 'update' ] ) && is_array( $products[ 'update' ] ) ) {
+				for( $i = 0; $i < count( $products[ 'update' ] ); $i++ ) {
+					update_post_meta( $products_to_update[$i]->get_id(), Rudr_Simple_WP_Crosspost::META_KEY . $blog_id, true );
 				}
 			}
 
