@@ -5,7 +5,7 @@
  * Author URI: https://rudrastyh.com
  * Description: Allows to crosspost multiple WooCommerce products at once.
  * Plugin URI: https://rudrastyh.com/support/bulk-crossposting
- * Version: 4.2
+ * Version: 4.3
  */
 
 class Rudr_WP_Crosspost_Bulk{
@@ -145,12 +145,17 @@ class Rudr_WP_Crosspost_Bulk{
 			// check if this post is already crossposted
 			if( $crossposted_post_id = Rudr_Simple_WP_Crosspost::is_crossposted( $object_id, $blog_id ) ) {
 				$request[ 'path' ] = "/wp/v2/{$rest_base}/{$crossposted_post_id}";
+				$action = 'update';
 			} else {
 				$request[ 'path' ] = "/wp/v2/{$rest_base}";
+				$action = 'create';
 			}
 
-			$request[ 'body' ] = array(
+			$post_data = array(
 				'date' => $post->post_date,
+				'date_gmt' => $post->post_date_gmt,
+				'modified' => $post->post_modified,
+				'modified_gmt' => $post->post_modified_gmt,
 				'slug' => $post->post_name,
 				'status' => $post->post_status,
 				'title' => $post->post_title,
@@ -165,28 +170,29 @@ class Rudr_WP_Crosspost_Bulk{
 			// exclude some fields
 			$excluded_fields = get_option( 'rudr_sac_excluded_fields', array() );
 			foreach( $excluded_fields as $key ) {
-				if( array_key_exists( $key, $request[ 'body' ] ) ) {
-					unset( $request[ 'body' ][ $key ] );
+				if( array_key_exists( $key, $post_data ) ) {
+					unset( $post_data[ $key ] );
 				}
 			}
 
 			// meta data
 			if( ! in_array( 'meta', $excluded_fields ) ) {
-				$request[ 'body' ] = Rudr_Simple_WP_Crosspost::add_meta( $request[ 'body' ], $post, $blog );
+				$post_data = Rudr_Simple_WP_Crosspost::add_meta( $post_data, $post, $blog );
 			}
 
 			if( ! in_array( 'terms', $excluded_fields ) ) {
-				$request[ 'body' ] = Rudr_Simple_WP_Crosspost::add_terms( $request[ 'body' ], $post, $blog );
+				$post_data = Rudr_Simple_WP_Crosspost::add_terms( $post_data, $post, $blog );
 			}
 
 			if( ! in_array( 'thumbnail', $excluded_fields ) ) {
-				$request[ 'body' ] = Rudr_Simple_WP_Crosspost::add_featured_image( $request[ 'body' ], $post, $blog );
+				$post_data = Rudr_Simple_WP_Crosspost::add_featured_image( $post_data, $post, $blog );
 			}
 
-			if( isset( $request[ 'body' ][ 'parent' ] ) && $request[ 'body' ][ 'parent' ] ) {
-				$request[ 'body' ][ 'parent' ] = Rudr_Simple_WP_Crosspost::is_crossposted( $request[ 'body' ][ 'parent' ], $blog_id );
+			if( isset( $post_data[ 'parent' ] ) && $post_data[ 'parent' ] ) {
+				$post_data[ 'parent' ] = Rudr_Simple_WP_Crosspost::is_crossposted( $post_data[ 'parent' ], $blog_id );
 			}
 
+			$request[ 'body' ] = apply_filters( 'rudr_swc_pre_crosspost_post_data', $post_data, $blog, $post, $action );
 			$body[ 'requests' ][] = $request;
 
 		}
@@ -220,6 +226,7 @@ class Rudr_WP_Crosspost_Bulk{
 						$batch_responses[ $i ][ 'body' ][ 'id' ],
 						$blog_id
 					);
+					update_post_meta( $object_ids[ $i ], Rudr_Simple_WP_Crosspost::META_KEY . $blog_id, 1 );
 				}
 
 			}
@@ -308,7 +315,7 @@ class Rudr_WP_Crosspost_Bulk{
 			// 2. Add to request body
 			if( $id = Rudr_Simple_Woo_Crosspost::is_crossposted_product( $product, $blog ) ) {
 				$product_data[ 'id' ] = $id;
-				$body[ 'update' ][] = $product_data;
+				$body[ 'update' ][] = apply_filters( 'rudr_swc_pre_crosspost_product_data', $product_data, $blog, $product, 'update' );
 				$products_to_update[] = $product;
 				// super cool story here is that we can update product variations at this step, we have everything for it
 				if( ! in_array( 'variations', $excluded ) ) {
@@ -317,7 +324,7 @@ class Rudr_WP_Crosspost_Bulk{
 
 			} else {
 				unset( $product_data[ 'id' ] );
-				$body[ 'create' ][] = $product_data;
+				$body[ 'create' ][] = apply_filters( 'rudr_swc_pre_crosspost_product_data', $product_data, $blog, $product, 'create' );
 				$products_to_create[] = $product; // array of product objects
 			}
 
@@ -353,6 +360,7 @@ class Rudr_WP_Crosspost_Bulk{
 					}
 					update_post_meta( $products_to_create[$i]->get_id(), Rudr_Simple_WP_Crosspost::META_KEY . $blog_id, true );
 					if( ! in_array( 'variations', $excluded ) ) {
+						// rudr_swc_pre_crosspost_variation_data is in this method
 						Rudr_Simple_Woo_Crosspost::add_product_variations( $products[ 'create' ][ $i ][ 'id' ], $products_to_create[$i], $blog );
 					}
 				}
