@@ -5,7 +5,7 @@
  * Author URI: https://rudrastyh.com
  * Description: Allows to crosspost multiple WooCommerce products at once.
  * Plugin URI: https://rudrastyh.com/support/bulk-crossposting
- * Version: 4.3
+ * Version: 4.4
  */
 
 class Rudr_WP_Crosspost_Bulk{
@@ -140,6 +140,9 @@ class Rudr_WP_Crosspost_Bulk{
 			// start creating our request
 			$request = array(
 				'method' => 'POST',
+				'headers' => array(
+					'User-Agent' => 'WordPress/' . get_bloginfo( 'version' ) . '; ' . get_bloginfo( 'url' ),
+				),
 			);
 
 			// check if this post is already crossposted
@@ -165,6 +168,9 @@ class Rudr_WP_Crosspost_Bulk{
 				'excerpt' => $post->post_excerpt,
 				'password' => $post->post_password,
 				'template' => get_page_template_slug( $post ),
+				'comment_status' => ( isset( $post->comment_status ) && in_array( $post->comment_status, array( 'open', 'closed' ) ) ? $post->comment_status : 'closed' ),
+				'ping_status' => ( isset( $post->ping_status ) && in_array( $post->ping_status, array( 'open', 'closed' ) ) ? $post->ping_status : 'closed' ),
+				'source_post_id' => $post->ID,
 			);
 
 			// exclude some fields
@@ -283,6 +289,9 @@ class Rudr_WP_Crosspost_Bulk{
 				'reviews_allowed'   => $product->get_reviews_allowed(),
 				'catalog_visibility' => $product->get_catalog_visibility(),
 				'featured'           => $product->get_featured(),
+				// for automatic connections
+				'source_product_id' => $product->get_id(),
+				'user_agent' => 'WordPress/' . get_bloginfo( 'version' ) . '; ' . get_bloginfo( 'url' ),
 			);
 
 			$product_data = Rudr_Simple_Woo_Crosspost::add_prices( $product_data, $product );
