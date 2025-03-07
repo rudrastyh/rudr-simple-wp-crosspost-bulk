@@ -5,7 +5,7 @@
  * Author URI: https://rudrastyh.com
  * Description: Allows to crosspost multiple WooCommerce products at once.
  * Plugin URI: https://rudrastyh.com/support/bulk-crossposting
- * Version: 4.4
+ * Version: 4.5
  */
 
 class Rudr_WP_Crosspost_Bulk{
@@ -279,6 +279,7 @@ class Rudr_WP_Crosspost_Bulk{
 			// 1. collect data
 			$product_data = array(
 				'name'              => $product->get_title(),
+				'slug'              => $product->get_slug(),
 				'description'       => $product->get_description(),
 				'short_description' => $product->get_short_description(),
 				'status'            => $product->get_status(),
