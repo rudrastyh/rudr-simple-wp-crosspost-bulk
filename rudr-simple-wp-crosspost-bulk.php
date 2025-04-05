@@ -5,7 +5,7 @@
  * Author URI: https://rudrastyh.com
  * Description: Allows to crosspost multiple WooCommerce products at once.
  * Plugin URI: https://rudrastyh.com/support/bulk-crossposting
- * Version: 4.5
+ * Version: 4.7
  */
 
 class Rudr_WP_Crosspost_Bulk{
@@ -446,60 +446,73 @@ class Rudr_WP_Crosspost_Bulk{
 
 	private function process_errors( $request, $post_type ) {
 		//file_put_contents( __DIR__ . '/log.txt' , print_r( $request, true ) );
+
+		// let's get our current errors first for this specific CPT
 		$errors = get_option( "rudr_swc_bulk_{$post_type}_errors", array() );
+		// basic variables
+		$res_code = wp_remote_retrieve_response_code( $request ) ;
+		$res_body = json_decode( wp_remote_retrieve_body( $request ), true );
 
-		// let's try to process WordPress errors first
-		if( 207 === wp_remote_retrieve_response_code( $request ) ) {
+		switch( $res_code ) {
 
-			$body = json_decode( wp_remote_retrieve_body( $request ), true );
-			$responses = isset( $body[ 'responses' ] ) ? $body[ 'responses' ] : array();
-
-			// using for here in case we make the errors more advanced
-			for( $i = 0; $i < count( $responses ); $i++ ) {
-				// should be great
-				if( ! empty( $responses[ $i ][ 'body' ][ 'id' ] ) ) {
-					continue;
+			// 404 no route error
+			case 404 : {
+				if( ! empty( $res_body[ 'code' ] ) ) {
+					$code = $res_body[ 'code' ];
+					$errors[ $code ] = 'all';
 				}
-				// error? record it and exit the loop
-				if( ! empty( $responses[ $i ][ 'body' ][ 'code' ] ) ) {
-					// ok we need to add this code to an array
-					$code = $responses[ $i ][ 'body' ][ 'code' ];
-					// in case we didn't have errors for this error code so far
-					if( empty( $errors[ $code ] ) ) {
-						$errors[ $code ] = 0;
-					}
-					// +1 error
-					$errors[ $code ]++;
+				break;
+			}
 
+			// regular WordPress errors
+			case 207 : {
+				$responses = isset( $res_body[ 'responses' ] ) ? $res_body[ 'responses' ] : array();
+
+				// using for here in case we make the errors more advanced
+				for( $i = 0; $i < count( $responses ); $i++ ) {
+					// OK
+					if( ! empty( $responses[ $i ][ 'body' ][ 'id' ] ) ) {
+						continue;
+					}
+					// add the error count based on the code
+					if( ! empty( $responses[ $i ][ 'body' ][ 'code' ] ) ) {
+						// ok we need to add this code to an array
+						$code = $responses[ $i ][ 'body' ][ 'code' ];
+						// in case we didn't have errors for this error code so far
+						if( empty( $errors[ $code ] ) ) {
+							$errors[ $code ] = 0;
+						}
+						// +1 error
+						$errors[ $code ]++;
+
+					}
+				}
+				break;
+			}
+
+			// processing errors for WooCommerce 200 - OK
+			case 200 : {
+				$create = isset( $res_body[ 'create' ] ) ? $res_body[ 'create' ] : array();
+				$update = isset( $res_body[ 'update' ] ) ? $res_body[ 'update' ] : array();
+				$responses = $create + $update;
+
+				// using for here in case we make the errors more advanced
+				for( $i = 0; $i < count( $responses ); $i++ ) {
+					// error? record it and exit the loop
+					if( ! empty( $responses[ $i ][ 'error' ][ 'code' ] ) ) {
+						// ok we need to add this code to an array
+						$code = $responses[ $i ][ 'error' ][ 'code' ];
+						// in case we didn't have errors for this error code so far
+						if( empty( $errors[ $code ] ) ) {
+							$errors[ $code ] = 0;
+						}
+						// +1 error
+						$errors[ $code ]++;
+					}
 				}
 			}
 
-		}
-
-		// processing errors for WooCommerce 200 - OK
-		if( 200 === wp_remote_retrieve_response_code( $request ) ) {
-
-			$body = json_decode( wp_remote_retrieve_body( $request ), true );
-			$create = isset( $body[ 'create' ] ) ? $body[ 'create' ] : array();
-			$update = isset( $body[ 'update' ] ) ? $body[ 'update' ] : array();
-			$responses = $create + $update;
-
-			// using for here in case we make the errors more advanced
-			for( $i = 0; $i < count( $responses ); $i++ ) {
-				// error? record it and exit the loop
-				if( ! empty( $responses[ $i ][ 'error' ][ 'code' ] ) ) {
-					// ok we need to add this code to an array
-					$code = $responses[ $i ][ 'error' ][ 'code' ];
-					// in case we didn't have errors for this error code so far
-					if( empty( $errors[ $code ] ) ) {
-						$errors[ $code ] = 0;
-					}
-					// +1 error
-					$errors[ $code ]++;
-				}
-			}
-
-		}
+		} // endswitch
 
 		update_option( "rudr_swc_bulk_{$post_type}_errors", $errors );
 
@@ -551,15 +564,11 @@ class Rudr_WP_Crosspost_Bulk{
 		//update_option( 'rudr_swc_bulk_errors', array( 'rest_post_invalid_id' => 2 ) );
 
 		$errors = get_option( "rudr_swc_bulk_{$post_type}_errors", array() );
-		if( 'product' === $post_type ) {
-			// WooCommerce
-			$error_1_count = ! empty( $errors[ 'woocommerce_rest_product_invalid_id' ] ) ? (int) $errors[ 'woocommerce_rest_product_invalid_id' ] : 0;
-			$error_2_count = ! empty( $errors[ 'woocommerce_product_invalid_image_id' ] ) ? (int) $errors[ 'woocommerce_product_invalid_image_id' ] : 0;
-			$total_errors = $error_1_count + $error_2_count;
+		if( array_key_exists( 'rest_no_route', $errors ) ) {
+			$display_notices = false;
+			$display_errors = true;
 		} else {
-			// other post types
-			$error_1_count = ! empty( $errors[ 'rest_post_invalid_id' ] ) ? (int) $errors[ 'rest_post_invalid_id' ] : 0;
-			$total_errors = $error_1_count;
+			$total_errors = array_sum( array_values( $errors ) );
 		}
 
 		// Success message when less than 10 products selected
@@ -602,26 +611,58 @@ class Rudr_WP_Crosspost_Bulk{
 		}
 
 		if( $display_errors ) {
-			// Display error message for error 1
-			if( isset( $error_1_count ) && $error_1_count ) {
-				?><div class="notice-warning notice is-dismissible"><p><?php
-				echo esc_html( sprintf(
-					_n( '%d %s hasn\'t been crossposted because its copy on another site was removed manually.', '%d %s haven\'t been crossposted because their copies on another site were removed manually.', $error_1_count ),
-					$error_1_count,
-					mb_strtolower( $error_1_count > 1 ? $post_type_object->label : $post_type_object->labels->singular_name )
-				) );
-				?></p></div><?php
-			}
+			foreach( $errors as $code => $count ) {
+				// who knows, maybe there is a zero count
+				if( ! $count ) {
+					continue;
+				}
+				switch( $code ) {
+					case 'rest_post_invalid_id' :
+					case 'woocommerce_rest_product_invalid_id' : {
+						$message = sprintf(
+							_n( '%d %s hasn&#8217;t been crossposted because its copy on another site was removed manually.', '%d %s haven&#8217;t been crossposted because their copies on another site were removed manually.', $count ),
+							$count,
+							mb_strtolower( $count > 1 ? $post_type_object->label : $post_type_object->labels->singular_name )
+						);
+						break;
+					}
+					case 'woocommerce_product_invalid_image_id' : {
+						$message = sprintf(
+							_n( '%d %s hasn&#8217;t been crossposted because its images on another site were removed manually.', '%d %s haven&#8217;t been crossposted because their images on another site were removed manually.', $count ),
+							$count,
+							mb_strtolower( $count > 1 ? $post_type_object->label : $post_type_object->labels->singular_name )
+						);
+						break;
+					}
+					case 'product_invalid_sku' : {
+						$message = sprintf(
+							_n( '%d %s hasn&#8217;t been crossposted because there is another item with the same SKU.', '%d %s haven&#8217;t been crossposted because there are items with the same SKUs.', $count ),
+							$count,
+							mb_strtolower( $count > 1 ? $post_type_object->label : $post_type_object->labels->singular_name )
+						);
+						break;
+					}
+					case 'product_invalid_global_unique_id' : {
+						$message = sprintf(
+							_n( '%d %s hasn&#8217;t been crossposted because there is another item with the same value of the field &#8220;GTIN, UPC, EAN, or ISBN&#8221; which must be unique.', '%d %s haven&#8217;t been crossposted because there are items with the same values of the field &#8220;GTIN, UPC, EAN, or ISBN&#8221; which must be unique.', $count ),
+							$count,
+							mb_strtolower( $count > 1 ? $post_type_object->label : $post_type_object->labels->singular_name )
+						);
+						break;
+					}
+					case 'rest_no_route' : {
+						$message = sprintf(
+							'%s haven&#8217;t been published or updated on the other site(s), because custom post type %s either doesn&#8217;t exist on the other site(s) or hasn&#8217;t been added to the REST API.',
+							$post_type_object->label,
+							$post_type_object->label
+						);
+						break;
+					}
 
-			// Display error message for error 2
-			if( isset( $error_2_count ) && $error_2_count ) {
-				?><div class="notice-warning notice is-dismissible"><p><?php
-				echo esc_html( sprintf(
-					_n( '%d %s hasn\'t been crossposted because its images on another site were removed manually.', '%d %s haven\'t been crossposted because their images on another site were removed manually.', $error_2_count ),
-					$error_2_count,
-					mb_strtolower( $error_2_count > 1 ? $post_type_object->label : $post_type_object->labels->singular_name )
-				) );
-				?></p></div><?php
+					// TODO CPT errors
+
+				}
+				?><div class="notice-warning notice is-dismissible"><p><?php echo esc_html( $message ) ?></p></div><?php
 			}
 
 			delete_option( "rudr_swc_bulk_{$post_type}_errors" );
