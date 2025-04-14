@@ -5,7 +5,7 @@
  * Author URI: https://rudrastyh.com
  * Description: Allows to crosspost multiple WooCommerce products at once.
  * Plugin URI: https://rudrastyh.com/support/bulk-crossposting
- * Version: 4.7
+ * Version: 4.8
  */
 
 class Rudr_WP_Crosspost_Bulk{
@@ -51,7 +51,7 @@ class Rudr_WP_Crosspost_Bulk{
 
 			foreach( $blogs as $blog ) {
 				$blogname = ( $use_domains || ! $blog[ 'name' ] ) ? str_replace( array( 'http://', 'https://' ), '', $blog[ 'url' ] ) : $blog[ 'name' ];
-				$bulk_actions[ 'crosspost_to_'. Rudr_Simple_WP_Crosspost::get_blog_id( $blog ) ] = "Crosspost to {$blogname}";
+				$bulk_actions[ 'crosspost_to_'. Rudr_Simple_WP_Crosspost::get_blog_id( $blog ) ] = "Sync to {$blogname}";
 			}
 		}
 
@@ -313,14 +313,44 @@ class Rudr_WP_Crosspost_Bulk{
 			}
 
 			if( ! in_array( 'tag_ids', $excluded ) ) {
-				$product_data[ 'tags' ] = Rudr_Simple_WP_Crosspost::get_synced_term_ids( $product->get_id(), 'product_tag', $blog );
-				$product_data[ 'tags' ] = apply_filters( 'rudr_swc_terms', $product_data[ 'tags' ], $product->get_id(), 'product_tag', $blog );
+				$product_data[ 'tags' ] = Rudr_Simple_WP_Crosspost::get_synced_term_ids(
+					get_the_terms( $product->get_id(), 'product_tag' ),
+					'product_tag',
+					$blog
+				);
+				$product_data[ 'tags' ] = is_array( $product_data[ 'tags' ] ) ? $product_data[ 'tags' ] : array();
+				$product_data[ 'tags' ] = array_map( function( $tag_id ) {
+					return array(
+						'id' => $tag_id,
+					);
+				}, $product_data[ 'tags' ] );
 			}
 			if( ! in_array( 'category_ids', $excluded ) ) {
-				$product_data[ 'categories' ] = Rudr_Simple_WP_Crosspost::get_synced_term_ids( $product->get_id(), 'product_cat', $blog );
-				$product_data[ 'categories' ] = apply_filters( 'rudr_swc_terms', $product_data[ 'categories' ], $product->get_id(), 'product_cat', $blog );
+				$product_data[ 'categories' ] = Rudr_Simple_WP_Crosspost::get_synced_term_ids(
+					get_the_terms( $product->get_id(), 'product_cat' ),
+					'product_cat',
+					$blog
+				);
+				$product_data[ 'categories' ] = is_array( $product_data[ 'categories' ] ) ? $product_data[ 'categories' ] : array();
+				$product_data[ 'categories' ] = array_map( function( $cat_id ) {
+					return array(
+						'id' => $cat_id,
+					);
+				}, $product_data[ 'categories' ] );
 			}
-
+			if( ! in_array( 'brand_ids', $excluded ) ) {
+				$product_data[ 'brands' ] = Rudr_Simple_WP_Crosspost::get_synced_term_ids(
+					get_the_terms( $product->get_id(), 'product_brand' ),
+					'product_brand',
+					$blog
+				);
+				$product_data[ 'brands' ] = is_array( $product_data[ 'brands' ] ) ? $product_data[ 'brands' ] : array();
+				$product_data[ 'brands' ] = array_map( function( $brand_id ) {
+					return array(
+						'id' => $brand_id,
+					);
+				}, $product_data[ 'brands' ] );
+			}
 
 			// 2. Add to request body
 			if( $id = Rudr_Simple_Woo_Crosspost::is_crossposted_product( $product, $blog ) ) {
@@ -556,7 +586,7 @@ class Rudr_WP_Crosspost_Bulk{
 
 			if( wp_next_scheduled( 'rudr_swc_bulk', array( $blog_id, $post_type ) ) ) {
 				$display_notices = false;
-				?><div class="notice-info notice swc-bulk-notice--in-progress"><p><?php echo esc_html( sprintf( '%s are currently being crossposted to %s in the background. It may take some time depending on how many %s you have selected.', $post_type_object->label, $blogname, mb_strtolower( $post_type_object->label ) ) ) ?></p></div><?php
+				?><div class="notice-info notice swc-bulk-notice--in-progress"><p><?php echo esc_html( sprintf( '%s are currently being synced to %s in the background. It may take some time depending on how many %s you have selected.', $post_type_object->label, $blogname, mb_strtolower( $post_type_object->label ) ) ) ?></p></div><?php
 			}
 		}
 
