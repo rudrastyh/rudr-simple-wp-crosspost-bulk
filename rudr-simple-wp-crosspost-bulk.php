@@ -5,7 +5,7 @@
  * Author URI: https://rudrastyh.com
  * Description: Allows to crosspost multiple WooCommerce products at once.
  * Plugin URI: https://rudrastyh.com/support/bulk-crossposting
- * Version: 4.8
+ * Version: 4.9
  */
 
 class Rudr_WP_Crosspost_Bulk{
@@ -147,10 +147,20 @@ class Rudr_WP_Crosspost_Bulk{
 
 			// check if this post is already crossposted
 			if( $crossposted_post_id = Rudr_Simple_WP_Crosspost::is_crossposted( $object_id, $blog_id ) ) {
-				$request[ 'path' ] = "/wp/v2/{$rest_base}/{$crossposted_post_id}";
+				$request[ 'path' ] = apply_filters(
+					'rudr_swc_pre_request_url',
+					"/wp/v2/{$rest_base}/{$crossposted_post_id}",
+					$object_id,
+					$blog
+				);
 				$action = 'update';
 			} else {
-				$request[ 'path' ] = "/wp/v2/{$rest_base}";
+				$request[ 'path' ] = apply_filters(
+					'rudr_swc_pre_request_url',
+					"/wp/v2/{$rest_base}",
+					$object_id,
+					$blog
+				);
 				$action = 'create';
 			}
 
@@ -204,7 +214,11 @@ class Rudr_WP_Crosspost_Bulk{
 		}
 
 		$request = wp_remote_request(
-			"{$blog[ 'url' ]}/wp-json/batch/v1/",
+			apply_filters(
+				'rudr_swc_pre_batch_request_url',
+				"{$blog[ 'url' ]}/wp-json/batch/v1/",
+				$body
+			),
 			array(
 				'method' => 'POST',
 				'timeout' => 30,
@@ -372,7 +386,11 @@ class Rudr_WP_Crosspost_Bulk{
 
 		// 3. let's make a request
 		$request = wp_remote_post(
-			$blog[ 'url' ] . '/wp-json/wc/v3/products/batch',
+			apply_filters(
+				'rudr_swc_pre_batch_request_url',
+				$blog[ 'url' ] . '/wp-json/wc/v3/products/batch',
+				$body
+			),
 			array(
 				'timeout' => 30,
 				'headers' => array(
