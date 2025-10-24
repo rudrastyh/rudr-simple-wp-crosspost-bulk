@@ -5,7 +5,7 @@
  * Author URI: https://rudrastyh.com
  * Description: Allows to crosspost multiple WooCommerce products at once.
  * Plugin URI: https://rudrastyh.com/support/bulk-crossposting
- * Version: 4.9
+ * Version: 4.10
  */
 
 class Rudr_WP_Crosspost_Bulk{
@@ -42,7 +42,7 @@ class Rudr_WP_Crosspost_Bulk{
 	// display the bulk actions
 	public function bulk_action( $bulk_actions ) {
 
-		$blogs = Rudr_Simple_WP_Crosspost::get_blogs();
+		$blogs = Rudr_Simple_WP_Crosspost::get_allowed_blogs();
 		// no blogs are added in the plugin settings or something
 		if( $blogs ) {
 
@@ -376,14 +376,14 @@ class Rudr_WP_Crosspost_Bulk{
 					Rudr_Simple_Woo_Crosspost::add_product_variations( $id, $product, $blog );
 				}
 
-			} else {
+			} elseif( ! $update_mode ) {
 				unset( $product_data[ 'id' ] );
 				$body[ 'create' ][] = apply_filters( 'rudr_swc_pre_crosspost_product_data', $product_data, $blog, $product, 'create' );
 				$products_to_create[] = $product; // array of product objects
 			}
 
 		}
-
+//echo '<pre>';print_r( json_encode( $body ) );exit;
 		// 3. let's make a request
 		$request = wp_remote_post(
 			apply_filters(
